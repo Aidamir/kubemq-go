@@ -4,15 +4,21 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"github.com/nats-io/nuid"
 	"io"
 	"time"
 
-	"github.com/google/uuid"
 	pb "github.com/kubemq-io/protobuf/go"
 	"go.opencensus.io/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+)
+
+const (
+	defaultMaxSendSize = 1024 * 1024 * 100 //100MB
+	defaultMaxRcvSize  = 1024 * 1024 * 100 //100MB
+
 )
 
 type gRPCTransport struct {
@@ -22,7 +28,7 @@ type gRPCTransport struct {
 }
 
 func newGRPCTransport(ctx context.Context, opts *Options) (Transport, *ServerInfo, error) {
-	var connOptions []grpc.DialOption
+	connOptions := []grpc.DialOption{grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(defaultMaxRcvSize), grpc.MaxCallSendMsgSize(defaultMaxSendSize))}
 	if opts.isSecured {
 		if opts.certFile != "" {
 			creds, err := credentials.NewClientTLSFromFile(opts.certFile, opts.serverOverrideDomain)
@@ -60,12 +66,12 @@ func newGRPCTransport(ctx context.Context, opts *Options) (Transport, *ServerInf
 		return nil, nil, err
 	}
 	go func() {
-		select {
-		case <-ctx.Done():
-			if g.conn != nil {
-				_ = g.conn.Close()
-			}
+
+		<-ctx.Done()
+		if g.conn != nil {
+			_ = g.conn.Close()
 		}
+
 	}()
 	g.client = pb.NewKubemqClient(g.conn)
 
@@ -371,6 +377,7 @@ func (g *gRPCTransport) SendCommand(ctx context.Context, command *Command) (*Com
 		Executed:         grpcResponse.Executed,
 		ExecutedAt:       time.Unix(grpcResponse.Timestamp, 0),
 		Error:            grpcResponse.Error,
+		Tags:             grpcResponse.Tags,
 	}
 	return commandResponse, nil
 }
@@ -445,6 +452,7 @@ func (g *gRPCTransport) SendQuery(ctx context.Context, query *Query) (*QueryResp
 		Metadata:         grpcResponse.Metadata,
 		ResponseClientId: grpcResponse.ClientID,
 		Body:             grpcResponse.Body,
+		Tags:             grpcResponse.Tags,
 		CacheHit:         grpcResponse.CacheHit,
 		Error:            grpcResponse.Error,
 	}
@@ -452,6 +460,9 @@ func (g *gRPCTransport) SendQuery(ctx context.Context, query *Query) (*QueryResp
 }
 
 func (g *gRPCTransport) SubscribeToQueries(ctx context.Context, channel, group string, errCh chan error) (<-chan *QueryReceive, error) {
+	if errCh == nil {
+		return nil, fmt.Errorf("error channel cannot be nil")
+	}
 	queriesCH := make(chan *QueryReceive, g.opts.receiveBufferSize)
 	subRequest := &pb.Subscribe{
 		SubscribeTypeData: pb.Queries,
@@ -520,21 +531,7 @@ func (g *gRPCTransport) SendResponse(ctx context.Context, response *Response) er
 }
 
 func (g *gRPCTransport) SendQueueMessage(ctx context.Context, msg *QueueMessage) (*SendQueueMessageResult, error) {
-	result, err := g.client.SendQueueMessage(ctx, &pb.QueueMessage{
-		MessageID:  msg.Id,
-		ClientID:   msg.ClientId,
-		Channel:    msg.Channel,
-		Metadata:   msg.Metadata,
-		Body:       msg.Body,
-		Tags:       msg.Tags,
-		Attributes: &pb.QueueMessageAttributes{},
-		Policy: &pb.QueueMessagePolicy{
-			ExpirationSeconds: msg.Policy.ExpirationSeconds,
-			DelaySeconds:      msg.Policy.DelaySeconds,
-			MaxReceiveCount:   msg.Policy.MaxReceiveCount,
-			MaxReceiveQueue:   msg.Policy.MaxReceiveQueue,
-		},
-	})
+	result, err := g.client.SendQueueMessage(ctx, msg.QueueMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -553,26 +550,12 @@ func (g *gRPCTransport) SendQueueMessage(ctx context.Context, msg *QueueMessage)
 
 func (g *gRPCTransport) SendQueueMessages(ctx context.Context, msgs []*QueueMessage) ([]*SendQueueMessageResult, error) {
 	br := &pb.QueueMessagesBatchRequest{
-		BatchID:  uuid.New().String(),
+		BatchID:  nuid.New().Next(),
 		Messages: []*pb.QueueMessage{},
 	}
 
 	for _, msg := range msgs {
-		br.Messages = append(br.Messages, &pb.QueueMessage{
-			MessageID:  msg.Id,
-			ClientID:   msg.ClientId,
-			Channel:    msg.Channel,
-			Metadata:   msg.Metadata,
-			Body:       msg.Body,
-			Tags:       msg.Tags,
-			Attributes: &pb.QueueMessageAttributes{},
-			Policy: &pb.QueueMessagePolicy{
-				ExpirationSeconds: msg.Policy.ExpirationSeconds,
-				DelaySeconds:      msg.Policy.DelaySeconds,
-				MaxReceiveCount:   msg.Policy.MaxReceiveCount,
-				MaxReceiveQueue:   msg.Policy.MaxReceiveQueue,
-			},
-		})
+		br.Messages = append(br.Messages, msg.QueueMessage)
 	}
 	batchResults, err := g.client.SendQueueMessagesBatch(ctx, br)
 	if err != nil {
@@ -620,28 +603,10 @@ func (g *gRPCTransport) ReceiveQueueMessages(ctx context.Context, req *ReceiveQu
 		if response.Messages != nil {
 			for _, msg := range response.Messages {
 				res.Messages = append(res.Messages, &QueueMessage{
-					Id:       msg.MessageID,
-					ClientId: msg.ClientID,
-					Channel:  msg.Channel,
-					Metadata: msg.Metadata,
-					Body:     msg.Body,
-					Tags:     msg.Tags,
-					Attributes: &QueueMessageAttributes{
-						Timestamp:         msg.Attributes.Timestamp,
-						Sequence:          msg.Attributes.Sequence,
-						MD5OfBody:         msg.Attributes.MD5OfBody,
-						ReceiveCount:      msg.Attributes.ReceiveCount,
-						ReRouted:          msg.Attributes.ReRouted,
-						ReRoutedFromQueue: msg.Attributes.ReRoutedFromQueue,
-						ExpirationAt:      msg.Attributes.ExpirationAt,
-						DelayedTo:         msg.Attributes.DelayedTo,
-					},
-					Policy: &QueueMessagePolicy{
-						ExpirationSeconds: msg.Policy.ExpirationSeconds,
-						DelaySeconds:      msg.Policy.DelaySeconds,
-						MaxReceiveCount:   msg.Policy.MaxReceiveCount,
-						MaxReceiveQueue:   msg.Policy.MaxReceiveQueue,
-					},
+					QueueMessage: msg,
+					transport:    g,
+					trace:        nil,
+					stream:       nil,
 				})
 			}
 

@@ -3,9 +3,8 @@ package kubemq
 import (
 	"context"
 	"errors"
+	pb "github.com/kubemq-io/protobuf/go"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -30,10 +29,6 @@ type Client struct {
 	ServerInfo             *ServerInfo
 	singleStreamQueueMutex chan bool
 	//	currentSQM *StreamQueueMessage
-}
-
-func generateUUID() string {
-	return uuid.New().String()
 }
 
 // NewClient - create client instance to be use to communicate with KubeMQ server
@@ -82,7 +77,7 @@ func (c *Client) NewEvent() *Event {
 // E - create an empty event object
 func (c *Client) E() *Event {
 	return &Event{
-		Id:        generateUUID(),
+		Id:        "",
 		Channel:   c.opts.defaultChannel,
 		Metadata:  "",
 		Body:      nil,
@@ -100,7 +95,7 @@ func (c *Client) NewEventStore() *EventStore {
 // ES - create an empty event store object
 func (c *Client) ES() *EventStore {
 	return &EventStore{
-		Id:        generateUUID(),
+		Id:        "",
 		Channel:   c.opts.defaultChannel,
 		Metadata:  "",
 		Body:      nil,
@@ -128,7 +123,7 @@ func (c *Client) NewCommand() *Command {
 // C - create an empty command object
 func (c *Client) C() *Command {
 	return &Command{
-		Id:        generateUUID(),
+		Id:        "",
 		Channel:   c.opts.defaultChannel,
 		Metadata:  "",
 		Body:      nil,
@@ -148,7 +143,7 @@ func (c *Client) NewQuery() *Query {
 // Q - create an empty query object
 func (c *Client) Q() *Query {
 	return &Query{
-		Id:        generateUUID(),
+		Id:        "",
 		Channel:   c.opts.defaultChannel,
 		Metadata:  "",
 		Body:      nil,
@@ -211,19 +206,22 @@ func (c *Client) NewQueueMessage() *QueueMessage {
 // QM - create an empty queue message object
 func (c *Client) QM() *QueueMessage {
 	return &QueueMessage{
-		Id:         "",
-		ClientId:   c.opts.clientId,
-		Channel:    "",
-		Metadata:   "",
-		Body:       nil,
-		Tags:       map[string]string{},
-		Attributes: nil,
-		Policy: &QueueMessagePolicy{
-			ExpirationSeconds: 0,
-			DelaySeconds:      0,
-			MaxReceiveCount:   0,
-			MaxReceiveQueue:   "",
+		QueueMessage: &pb.QueueMessage{
+			MessageID:  "",
+			ClientID:   c.opts.clientId,
+			Channel:    "",
+			Metadata:   "",
+			Body:       nil,
+			Tags:       map[string]string{},
+			Attributes: nil,
+			Policy: &pb.QueueMessagePolicy{
+				ExpirationSeconds: 0,
+				DelaySeconds:      0,
+				MaxReceiveCount:   0,
+				MaxReceiveQueue:   "",
+			},
 		},
+
 		transport: c.transport,
 		trace:     nil,
 	}
@@ -325,4 +323,9 @@ func (c *Client) SQM() *StreamQueueMessage {
 		releaseCh:         c.singleStreamQueueMutex,
 	}
 	return sqm
+}
+
+// Ping - get status of current connection
+func (c *Client) Ping(ctx context.Context) (*ServerInfo, error) {
+	return c.transport.Ping(ctx)
 }

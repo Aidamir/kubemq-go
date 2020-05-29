@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
 	pb "github.com/kubemq-io/protobuf/go"
+	"github.com/nats-io/nuid"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/gorilla/websocket"
@@ -133,7 +133,7 @@ type restTransport struct {
 
 func newRestTransport(ctx context.Context, opts *Options) (Transport, *ServerInfo, error) {
 	rt := &restTransport{
-		id:          uuid.New().String(),
+		id:          nuid.New().Next(),
 		restAddress: opts.restUri,
 		wsAddress:   opts.webSocketUri,
 		wsConn:      nil,
@@ -561,23 +561,8 @@ func (rt *restTransport) SendResponse(ctx context.Context, response *Response) e
 
 func (rt *restTransport) SendQueueMessage(ctx context.Context, msg *QueueMessage) (*SendQueueMessageResult, error) {
 	resp := &restResponse{}
-	msgSend := &pb.QueueMessage{
-		MessageID:  msg.Id,
-		ClientID:   msg.ClientId,
-		Channel:    msg.Channel,
-		Metadata:   msg.Metadata,
-		Body:       msg.Body,
-		Tags:       msg.Tags,
-		Attributes: &pb.QueueMessageAttributes{},
-		Policy: &pb.QueueMessagePolicy{
-			ExpirationSeconds: msg.Policy.ExpirationSeconds,
-			DelaySeconds:      msg.Policy.DelaySeconds,
-			MaxReceiveCount:   msg.Policy.MaxReceiveCount,
-			MaxReceiveQueue:   msg.Policy.MaxReceiveQueue,
-		},
-	}
 	uri := fmt.Sprintf("%s/queue/send", rt.restAddress)
-	_, err := rt.newRequest().SetBody(msgSend).SetResult(resp).SetError(resp).Post(uri)
+	_, err := rt.newRequest().SetBody(msg.QueueMessage).SetResult(resp).SetError(resp).Post(uri)
 	if err != nil {
 		return nil, err
 	}
@@ -591,25 +576,11 @@ func (rt *restTransport) SendQueueMessage(ctx context.Context, msg *QueueMessage
 func (rt *restTransport) SendQueueMessages(ctx context.Context, msgs []*QueueMessage) ([]*SendQueueMessageResult, error) {
 	resp := &restResponse{}
 	br := &pb.QueueMessagesBatchRequest{
-		BatchID:  uuid.New().String(),
+		BatchID:  nuid.New().Next(),
 		Messages: []*pb.QueueMessage{},
 	}
 	for _, msg := range msgs {
-		br.Messages = append(br.Messages, &pb.QueueMessage{
-			MessageID:  msg.Id,
-			ClientID:   msg.ClientId,
-			Channel:    msg.Channel,
-			Metadata:   msg.Metadata,
-			Body:       msg.Body,
-			Tags:       msg.Tags,
-			Attributes: &pb.QueueMessageAttributes{},
-			Policy: &pb.QueueMessagePolicy{
-				ExpirationSeconds: msg.Policy.ExpirationSeconds,
-				DelaySeconds:      msg.Policy.DelaySeconds,
-				MaxReceiveCount:   msg.Policy.MaxReceiveCount,
-				MaxReceiveQueue:   msg.Policy.MaxReceiveQueue,
-			},
-		})
+		br.Messages = append(br.Messages, msg.QueueMessage)
 	}
 	uri := fmt.Sprintf("%s/queue/send_batch", rt.restAddress)
 	_, err := rt.newRequest().SetBody(br).SetResult(resp).SetError(resp).Post(uri)
