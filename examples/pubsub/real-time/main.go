@@ -1,4 +1,4 @@
-package real_time
+package main
 
 import (
 	"context"
@@ -81,7 +81,7 @@ func main() {
 					log.Println("Receiver B - Event Received, done")
 					return
 				}
-				log.Printf("Receiver B - Event Received:\nEventID: %s\nChannel: %s\nMetadata: %s\nBody: %s\n", event.Id, event.Channel, event.Metadata, event.Body)
+				log.Printf("Receiver B - Event Received:\nEventID: %s\nChannel: %s\nMetadata: %s\nBody: %s\nClientId: %s", event.Id, event.Channel, event.Metadata, event.Body, event.ClientId)
 			case <-ctx.Done():
 				return
 			}
@@ -89,12 +89,16 @@ func main() {
 	}()
 	// wait for receiver ready
 	time.Sleep(100 * time.Millisecond)
-	err = sender.E().
+	e := sender.E().
 		SetId("some-id").
 		SetChannel(channelName).
 		SetMetadata("some-metadata").
-		SetBody([]byte("hello kubemq - sending single event")).
-		Send(ctx)
+		SetBody([]byte("hello kubemq - sending single event"))
+//		SetClientId("bla-bla")
+
+	log.Printf("\nBefore sending ClientId:%s", e.ClientId)
+	    e.Send(ctx)
+
 	if err != nil {
 		log.Fatal(err)
 	}
